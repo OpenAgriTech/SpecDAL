@@ -8,10 +8,14 @@ from collections import OrderedDict
 from specdal.readers import read
 import logging
 import os
+from numbers import Number
+import numpy.lib.mixins
+import xarray
+import copy
 
 logging.basicConfig(level=logging.WARNING,
         format="%(levelname)s:%(name)s:%(message)s\n")
-class Spectrum(object):
+class Spectrum(numpy.lib.mixins.NDArrayOperatorsMixin):
     """Class that represents a single spectrum
     
     Parameters
@@ -39,7 +43,8 @@ class Spectrum(object):
     def __init__(self, measure_type=None, name=None, filepath=None, measurement=None,
                  metadata=None,
                  interpolated=False, stitched=False, jump_corrected=False,
-                 verbose=False):
+                 derivative_order=0,
+                 verbose=False, reader=None):
         if name is None:
             assert filepath is not None
             name = os.path.splitext(os.path.basename(filepath))[0]
@@ -52,8 +57,9 @@ class Spectrum(object):
         self.interpolated = interpolated
         self.stitched = stitched
         self.jump_corrected = jump_corrected
+        self.derivative_order = derivative_order
         if filepath:
-            self.read(filepath, measure_type, verbose=verbose)
+            self.read(filepath, measure_type, verbose=verbose, reader=reader)
     def __str__(self):
         string = "\nname:\t\t{!s},\n".format(self.name)
         string += "measure_type:\t{!s}\n".format(self.measure_type)
@@ -72,12 +78,30 @@ class Spectrum(object):
             string += "\t{}:{}\n".format(key, item)
         return string
     ##################################################
+    # Subsetter class to subset a spectrum
+    class Subsetter:
+        def __init__(self, spectrum, locator):
+            self.spectrum = spectrum
+            self.locator = locator
+
+        def __getitem__(self, *vargs, **kwargs):
+            self.spectrum.measurement = self.locator.__getitem__(*vargs, **kwargs)
+            if isinstance(self.spectrum.measurement, Number): return self.spectrum.measurement
+            self.spectrum.metadata["wavelength_range"] = (np.min(self.spectrum.measurement.index),
+                                                np.max(self.spectrum.measurement.index))
+            return self.spectrum
+
+    @property
+    def loc(self):
+        return self.Subsetter(copy.deepcopy(self), self.measurement.loc)
+
+    ##################################################
     # reader
-    def read(self, filepath, measure_type, verbose=False):
+    def read(self, filepath, measure_type, verbose=False, reader=None):
         '''
         Read measurement from a file.
         '''
-        data, meta = read(filepath, verbose=verbose)
+        data, meta = read(filepath, verbose=verbose, reader=reader)
         self.metadata = meta
         if measure_type == 'pct_reflect' and 'pct_reflect' not in data:
             self.measurement = self.get_pct_reflect(data)
@@ -130,6 +154,91 @@ class Spectrum(object):
         else:
             logging.warning("Dataframe lacks columns to compute pct_reflect.")
         return pct_reflect
+
+    def derivative(self):
+        '''
+        '''
+        self.measurement = op.derivative(self.measurement)
+        self.derivative_order += 1
+
+    def savgol_filter(self, window_length, polyorder, deriv=0,
+                        delta=1.0, axis=-1, mode='interp', cval=0.0):
+        '''
+        '''
+        self.measurement = op.savgol(self.measurement, 
+                        window_length, polyorder, deriv,
+                        delta, axis, mode, cval)
+        self.savgol_window = window_length
+        self.savgol_polyorder = polyorder
+
+    def normalize(self, wave="max", interpolate="False", maximum=1.0, value_norm=None):
+        '''
+        This methods normalizes an spectra an returns a new spectra
+        '''
+
+        normalized = copy.deepcopy(self)
+        if normalized.metadata is None:
+            normalized.metadata = {}
+
+        normalized.measurement, maximum, wave = op.normalize(self.measurement, 
+                                  maximum=maximum, wave=wave, value_norm=value_norm,
+                                  interpolate=interpolate)
+        
+        normalized.metadata["normalized"] = True
+        normalized.metadata["normalize_value"] = value_norm
+        normalized.metadata["normalize_wave"] = wave
+        
+        return normalized
+
+    ##################################################
+    # method for computing the values for a specific satellite
+
+    def getRSR(self, satellite="aqua", sensor="modis", rsr_path=__file__.replace("/containers/spectrum.py","/rsr/")):
+        # We build a list of available rsr
+        available_rsr = [x[:-7] for x in os.listdir(rsr_path) if x[0] != "."]
+        # Build rsr
+        if sensor == "aviris":
+            rsr_path = rsr_path+f"{sensor}_RSR.nc"
+        else:
+            rsr_path = rsr_path+f"{satellite}_{sensor}_RSR.nc"
+        # Read bands from dataframe
+        try:
+            df = xarray.open_dataset(rsr_path).to_dataframe()
+        except (FileNotFoundError, IOError):
+            print(f"Satellite-sensor combination not available. The options are {available_rsr}")
+
+        # Reshape the dataframe as needed
+        df.reset_index(inplace=True)
+        df.drop(["wavelengths"], axis=1, inplace=True)
+        #df.set_index(["bands","wavelength"], inplace=True)
+        rsr = df.pivot(index="wavelength", columns="bands")
+        rsr.columns = rsr.columns.droplevel()
+        rsr.columns.name=None
+        rsr.index.name = "Wavelength"
+        # round index to 1 decimal
+        rsr.index = rsr.index.values.round(0)
+        # We sort the dataframe
+        rsr = rsr[sorted(rsr.columns)]
+        # Remove duplicated indices and sort by index
+        rsr = rsr.groupby(level=0).sum().sort_index()
+        
+        return rsr
+
+    def getSatellite(self, satellite="aqua", sensor="modis", rsr_path = __file__.replace("/containers/spectrum.py","/rsr/"), rsr=None):
+        if type(rsr) == type(None):
+            # get relative spectral response
+            rsr = self.getRSR(satellite, sensor, rsr_path)
+        # compute reflectance by band
+        ref = rsr.mul(self.measurement, axis='index').sum(axis="index")/rsr.sum(axis="index")
+        # save to spectrum
+        name = self.name
+        spectrum = Spectrum(name=name, measurement=ref, metadata=self.metadata, measure_type=self.measure_type)
+
+        spectrum.metadata["satellite"] = satellite
+        spectrum.metadata["sensor"] = sensor
+        
+        return spectrum
+
     ##################################################
     # wrapper around plot function
     def plot(self, *args, **kwargs):
@@ -139,35 +248,75 @@ class Spectrum(object):
         ''''''
         return pd.DataFrame(self.measurement).transpose().to_csv(
             *args, **kwargs)
+
     ##################################################
-    # wrapper around pandas series operators
-    def __add__(self, other):
+    # wrapper for numpy functions
+    def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
         new_measurement = None
         new_name = self.name + '+'
-        if isinstance(other, Spectrum):
-            assert self.measure_type == other.measure_type
-            new_measurement = self.measurement.__add__(other.measurement).dropna()
-            new_name += other.name
+        if method == '__call__':
+            if self.metadata is None:
+                metadata = None
+            else:
+                metadata = self.metadata
+                metadata['file'] = None
+                metadata["measurement_type"]="TRANS_TYPE"
+            new_name = ufunc.__name__+"("
+            values = []
+            for input in inputs:
+                if isinstance(input, Number):
+                    values.append(input)
+                    new_name = new_name +str(input)+", "
+                elif isinstance(input, Spectrum):
+                    values.append(input.measurement)
+                    new_name = new_name+input.name+", "
+                else:
+                    return NotImplemented
+            
+            new_name = new_name[:-2]+")"
+            if metadata is not None:
+                metadata['name'] = new_name
+            return Spectrum(name=new_name, measurement=ufunc(*values, **kwargs),metadata=metadata, measure_type = 'TRANS_TYPE')
         else:
-            new_measurement = self.measurement.__add__(other)
-        return Spectrum(name=new_name, measurement=new_measurement,
-                        measure_type=self.measure_type)
-    def __isub__(self, other):
-        pass
-    def __imul__(self, other):
-        pass
-    def __itruediv__(self, other):
-        pass
-    def __ifloordiv__(self, other):
-        pass
-    def __iiadd__(self, other):
-        pass
-    def __isub__(self, other):
-        pass
-    def __imul__(self, other):
-        pass
-    def __itruediv__(self, other):
-        pass
-    def __ifloordiv__(self, other):
-        pass
+            return NotImplemented
+
+    ##################################################
+    # duplicate spectrum
+    def copy(self):
+        return copy.deepcopy(self)
+
+    ##################################################
+    # wrapper for array operations
+    def __array__(self, dtype=None):
+        return self.measurement.values
+
+    # def __add__(self, other):
+    #     new_measurement = None
+    #     new_name = self.name + '+'
+    #     if isinstance(other, Spectrum):
+    #         assert self.measure_type == other.measure_type
+    #         new_measurement = self.measurement.__add__(other.measurement).dropna()
+    #         new_name += other.name
+    #     else:
+    #         new_measurement = self.measurement.__add__(other)
+    #     return Spectrum(name=new_name, measurement=new_measurement,
+    #                     measure_type=self.measure_type)
+    # def __isub__(self, other):
+    #     pass
+    # def __imul__(self, other):
+    #     pass
+    # def __itruediv__(self, other):
+    #     pass
+    # def __ifloordiv__(self, other):
+    #     pass
+    # def __iiadd__(self, other):
+    #     pass
+    # def __isub__(self, other):
+    #     pass
+    # def __imul__(self, other):
+    #     pass
+    # def __itruediv__(self, other):
+    #     pass
+    # def __ifloordiv__(self, other):
+    #     pass
     

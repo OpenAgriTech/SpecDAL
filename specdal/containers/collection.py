@@ -3,6 +3,7 @@
 # pandas.DataFrame.
 import pandas as pd
 import numpy as np
+from numbers import Number
 from collections import OrderedDict, defaultdict
 from .spectrum import Spectrum
 import specdal.operators as op
@@ -45,6 +46,10 @@ def df_to_collection(df, name, measure_type='pct_reflect'):
     c: specdal.Collection object
     
     '''
+    # Sanitize as numeric:
+    df = df.astype("float")
+    df.columns = df.columns.astype("float")
+    
     c = Collection(name=name, measure_type=measure_type)
     wave_cols, meta_cols = op.get_column_types(df)
     metadata_dict = defaultdict(lambda: None)
@@ -107,28 +112,22 @@ class Collection(object):
     """
     Represents a dataset consisting of a collection of spectra
     """
-    def __init__(self, name, directory=None, spectra=None, spectra_radiance=None,
-                 measure_type='pct_reflect', metadata=None, flags=None):
+    def __init__(self, name, directory=None, spectra=None, ext=[".asd", ".sed", ".sig",".pico",".light"],
+                 measure_type='pct_reflect', metadata=None, flags=None,
+                 reader=None):
         self.name = name
         self.spectra = spectra
-        self.spectra_radiance = spectra_radiance
         self.measure_type = measure_type
         self.metadata = metadata
         self.flags = flags
         if directory:
-            self.read(directory, measure_type)
+            self.read(directory, measure_type, ext=ext, reader=reader)
     @property
     def spectra(self):
         """
         A list of Spectrum objects in the collection
         """
         return list(self._spectra.values())
-    @property
-    def spectra_radiance(self):
-        """
-        A list of Spectrum objects in the collection
-        """
-        return list(self._spectra_radiance.values())
 
 
     @property
@@ -143,16 +142,6 @@ class Collection(object):
             for spectrum in value:
                 assert spectrum.name not in self._spectra
                 self._spectra[spectrum.name] = spectrum
-
-    @spectra_radiance.setter
-    def spectra_radiance(self, value):
-        self._spectra_radiance = OrderedDict()
-        if value is not None:
-            # assume value is an iterable such as list
-            for spectrum in value:
-                assert spectrum.name not in self._spectra_radiance
-                self._spectra_radiance[spectrum.name] = spectrum
-
     @property
     def flags(self):
         """
@@ -221,26 +210,6 @@ unpredictable behavior."""
             print("Unexpected exception occurred")
             raise e
 
-    @property
-    def radiance(self):
-        '''
-        Get measurements as a Pandas.DataFrame
-        '''
-        try:
-            self._check_uniform_wavelengths()
-            objs = [s.measurement for s in self.spectra_radiance]
-            keys = [s.name for s in self.spectra_radiance]
-            return pd.concat(objs=objs, keys=keys, axis=1)
-        except pd.core.indexes.base.InvalidIndexError as err:
-            # typically from duplicate index due to overlapping wavelengths
-            if not all([s.stitched for s in self.spectra_radiance]):
-                logging.warning('{}: Try after stitching the overlaps'.format(err))
-            raise err
-        except Exception as e:
-            print("Unexpected exception occurred")
-            raise e
-
-
     def _unflagged_data(self):
         try:
             spectra = [s for s in self.spectra if not s.name in self.flags]
@@ -263,15 +232,6 @@ unpredictable behavior."""
         assert spectrum.name not in self._spectra
         assert isinstance(spectrum, Spectrum)
         self._spectra[spectrum.name] = spectrum
-
-
-    def append_radiance(self, spectrum_radiance):
-        """
-        insert spectrum with radiance to the collection
-        """
-        assert spectrum_radiance.name not in self._spectra_radiance
-        assert isinstance(spectrum_radiance, Spectrum)
-        self._spectra_radiance[spectrum_radiance.name] = spectrum_radiance
         
     def data_with_meta(self, data=True, fields=None):
         """
@@ -293,11 +253,9 @@ unpredictable behavior."""
         
         """
         if fields is None:
-            fields = []
-            for s in self.spectra:
-                for key in s.metadata.keys():
-                    if key not in fields:
-                        fields.append(key)
+            fields = ['file', 'instrument_type', 'integration_time',
+                      'measurement_type', 'gps_time_tgt', 'gps_time_ref',
+                      'wavelength_range']
         meta_dict = {}
         for field in fields:
             meta_dict[field] = [s.metadata[field] if field in s.metadata
@@ -327,7 +285,7 @@ unpredictable behavior."""
     # reader
     def read(self, directory, measure_type='pct_reflect',
              ext=[".asd", ".sed", ".sig",".pico",".light"], recursive=False,
-             verbose=False):
+             verbose=False, reader=None):
         """
         read all files in a path matching extension
         """
@@ -346,7 +304,7 @@ unpredictable behavior."""
                 try:
                     spectrum = Spectrum(name=f_name, filepath=filepath,
                                         measure_type=measure_type,
-                                        verbose=verbose)
+                                        verbose=verbose, reader=reader)
                     self.append(spectrum)
                 except UnicodeDecodeError:
                     logging.warning("Input file {} contains non-unicode "
@@ -355,6 +313,34 @@ unpredictable behavior."""
                 except KeyError:
                     logging.warning("Input file {} missing metadata key. "
                                     "Please inspect input file.".format(f_name))
+
+    ##################################################
+    # Subsetter class to subset a collection
+    class Subsetter:
+        def __init__(self, collection, locator):
+            self.collection = collection
+            self.locator = locator
+
+        def __getitem__(self, *vargs, **kwargs):
+            for spectra in self.collection.spectra:
+                # We get the name of the spectra
+                name = spectra.name
+                # We get the subset
+                tmp = pd.Series(self.locator.__getitem__(*vargs, **kwargs)[name])
+                # We save it as spectra
+                spectra.measurement = tmp
+                if isinstance(tmp, Number): 
+                    spectra.metadata["wavelength_range"] = None
+                else:
+                    spectra.metadata["wavelength_range"] = (np.min(tmp.index),
+                                        np.max(tmp.index))
+
+            return self.collection
+
+    @property
+    def loc(self):
+        return self.Subsetter(copy.deepcopy(self), self.data.loc)
+
     ##################################################
     # wrapper around spectral operations
     def interpolate(self, spacing=1, method='slinear'):
@@ -365,30 +351,52 @@ unpredictable behavior."""
     def stitch(self, method='max'):
         '''
 	'''
-        #Stitch reflectance
         for spectrum in self.spectra:
             try:
                 spectrum.stitch(method)
             except Exception as e:
                 logging.error("Error occurred while stitching {}".format(spectrum.name))
                 raise e
-        # Stitch radiance
-        for spectrum_rad in self.spectra_radiance:
-            try:
-                spectrum_rad.stitch(method)
-            except Exception as e:
-                logging.error("Error occurred while stitching {}".format(spectrum_rad.name))
-
-                raise e
     def jump_correct(self, splices, reference, method='additive'):
         '''
 	'''
-        #Jump correct reflectance
         for spectrum in self.spectra:
             spectrum.jump_correct(splices, reference, method)
-        # Jump correct radiance
-        for spectrum_rad in self.spectra_radiance:
-            spectrum_rad.jump_correct(splices, reference, method)
+
+    def savgol_filter(self, window_length, polyorder, deriv=0,
+                    delta=1.0, axis=-1, mode='interp', cval=0.0):
+        self.metadata["savgol_window_length"] = window_length
+        self.metadata["savgol_polyorder"] = polyorder
+
+        # We iterate over all spectra 
+        for spectra_tmp in self.spectra:
+            spectra_tmp.savgol_filter(window_length, 
+                            polyorder, deriv, delta, axis, mode, cval)
+            
+    def normalize(self, wave="max", interpolate="False", maximum=1.0, value_norm=None):
+        '''
+        This methods normalizes an spectra an returns a new spectra
+        '''
+        c_tmp = Collection(name=self.name, metadata=self.metadata)
+
+        if c_tmp.metadata is None:
+            c_tmp.metadata = {"normalized":True}
+
+        # We iterate over all spectra 
+        for spectra_tmp in self.spectra:
+            norm_tmp = spectra_tmp.normalize(wave, interpolate, 
+                                             maximum, value_norm)
+            c_tmp.append(norm_tmp)
+
+        return c_tmp
+
+    def derivative(self):
+        '''
+        '''
+        for spectrum in self.spectra:
+            spectrum.derivative()
+            
+
     ##################################################
     # group operations
     def groupby(self, separator, indices, filler=None):
@@ -480,3 +488,26 @@ unpredictable behavior."""
             self.append(spectrum)
         return spectrum
 
+    ##################################################
+    # duplicate collection
+    def copy(self):
+        return copy.deepcopy(self)
+
+    ##################################################
+    # method for computing the values for a specific satellite
+
+    def getSatellite(self, satellite="Aqua", sensor="MODIS", rsr_path = __file__.replace("/containers/collection.py","/rsr/"),rsr=None):
+        c_tmp = Collection(name=self.name, metadata={})
+        c_tmp.metadata["satellite"] = satellite
+        c_tmp.metadata["sensor"] = sensor
+        # compute reflectance by bande
+        size_compute = len(self.spectra)
+        i = 1
+        # We iterate over all spectra to compute the reflectance per band
+        for spectra_tmp in self.spectra:
+            # we print current spectra
+            print(f"Spectra {i}/{size_compute}.", end="\r")
+            c_tmp.append(spectra_tmp.getSatellite(satellite, sensor, rsr_path,rsr))
+            i+=1
+
+        return c_tmp
