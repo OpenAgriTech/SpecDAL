@@ -40,16 +40,14 @@ class Spectrum(numpy.lib.mixins.NDArrayOperatorsMixin):
     pandas.Series with index named: "wavelength".
     
     """
-    def __init__(self, measure_type=None, name=None, filepath=None, measurement=None,
-                 metadata=None,
+    def __init__(self, name=None, filepath=None, measurement=None,
+                 measure_type='pct_reflect', metadata=None,
                  interpolated=False, stitched=False, jump_corrected=False,
                  derivative_order=0,
                  verbose=False, reader=None):
         if name is None:
             assert filepath is not None
             name = os.path.splitext(os.path.basename(filepath))[0]
-        if measure_type is None:
-            measure_type = 'pct_reflect'
         self.name = name
         self.measurement = measurement
         self.measure_type = measure_type
