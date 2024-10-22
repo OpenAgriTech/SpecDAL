@@ -72,6 +72,9 @@ def read_sig(filepath, read_data=True, read_metadata=True, verbose=False):
         elif raw_metadata['units'] == "Irradiance, Irradiance":
             colnames = ["wavelength", "ref_irradiance",
                         "tgt_irradiance", "pct_reflect"]
+        else:
+            colnames = ["wavelength", "ref_raw", "tgt_raw", "pct_reflect"]
+
         data = pd.read_csv(filepath, skiprows=i+1,
                              sep="\s+", index_col=0,
                              header=None, names=colnames
