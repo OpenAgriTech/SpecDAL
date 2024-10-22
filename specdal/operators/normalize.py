@@ -1,6 +1,10 @@
 import pandas as pd
 import numpy as np
-from scipy.integrate import simps
+try:
+    from scipy.integrate import simpson as simps
+except ImportError as ex:
+    from scipy.integrate import simps
+
 ################################################################################
 def normalize(series, value_norm=None, maximum=1, wave="max", interpolate="False"):
     '''
