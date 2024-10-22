@@ -76,6 +76,10 @@ def read_sig(filepath, read_data=True, read_metadata=True, verbose=False):
                              sep="\s+", index_col=0,
                              header=None, names=colnames
         )
+        for column in data.columns:
+            data[column] = data[column].astype(str).str.replace(',', '.').astype(float)
+        data.index = data.index.astype(str).str.replace(',', '.').astype(float)
+
         if "pct_reflect" in data:
             data["pct_reflect"] = data["pct_reflect"]/100
     if read_metadata:
