@@ -1,7 +1,7 @@
 from distutils.core import setup
 
 setup(name='specdal',
-      version='0.2.4',
+      version='0.2.4b',
       description='Package for processing spectroscopy data',
       long_description=open('README.rst').read(),
       scripts=[
@@ -13,7 +13,7 @@ setup(name='specdal',
       entry_points={
           'gui_scripts': ['specdal_gui = specdal.gui.viewer:main'],
       },
-      url='https://github.com/EnSpec/SpecDAL/',
+      url='https://github.com/OpenAgriTech/SpecDAL/',
       author='Young Lee',
       author_email='ylee546@wisc.edu',
       license='MIT',
