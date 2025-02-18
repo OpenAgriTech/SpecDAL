@@ -36,12 +36,25 @@ Features
      objects to provide simpler interface for spectral functions
 
 3. GUI (under development)
-   
+
+Features specific to this fork
+===============================
+
+- Support for radiance in SVC files
+
+- Support for extended metadata in SVC files
+
+- Support for commas in SVC files recorded in computer with non US settings
+
+- Some bugs fixed and minor compatibility issues due to updated libraries
+
+
+
 Tutorials
 =========
 
 See the Jupyter notebooks `here
-<https://github.com/EnSpec/SpecDAL/tree/master/specdal/examples/>`_.
+<https://github.com/OpenAgriTech/SpecDAL/tree/master/specdal/examples/>`_.
 
 
 Installation
@@ -51,6 +64,9 @@ SpecDAL can be installed from PyPI using pip. For a more detailed
 walkthrough, see
 `http://specdal-test.readthedocs.io/en/latest/installation.html`
 
+However, if you want to take advantage of the updates in this fork
+you should install from sources, as specified below. 
+
 Installation from Source
 ========================
 
@@ -59,7 +75,11 @@ in your current environment. A virtual environment can be used to preserve other
 
 SpecDAL can also be installed from source.  Open a terminal and run the command:
 
-``git clone https://github.com/EnSpec/SpecDAL.git && pip install SpecDAL/`` 
+``git clone https://github.com/OpenAgriTech/SpecDAL.git && pip install SpecDAL/`` 
+
+or 
+
+``pip install git+https://github.com/OpenAgriTech/SpecDAL``
 
 The SpecDAL python package and ``specdal_pipeline`` command-line tool will be
 installed on your system (see ``specdal_pipeline --help`` for usage).
