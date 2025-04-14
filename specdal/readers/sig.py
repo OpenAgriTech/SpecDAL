@@ -107,6 +107,9 @@ def read_sig(filepath, read_data=True, read_metadata=True, verbose=False):
 
         # Extract longitude
         try:
+            if len(raw_metadata['longitude'].replace(' ', '').split(',')) > 2:
+                geo_parts = raw_metadata['longitude'].replace(' ', '').split(',')
+                raw_metadata['longitude'] = geo_parts[0]+geo_parts[1]+" , "+geo_parts[2]+geo_parts[3]
             metadata['longitude_ref'], metadata['longitude_tgt'] = tuple(
                 map(str, raw_metadata['longitude'].replace(' ', '').split(',')))
             #Convert longitude string to float (reference and target)
@@ -118,6 +121,9 @@ def read_sig(filepath, read_data=True, read_metadata=True, verbose=False):
 
         # Extract latitude
         try:
+            if len(raw_metadata['latitude'].replace(' ', '').split(',')) > 2:
+                geo_parts = raw_metadata['latitude'].replace(' ', '').split(',')
+                raw_metadata['latitude'] = geo_parts[0]+geo_parts[1]+" , "+geo_parts[2]+geo_parts[3]
             metadata['latitude_ref'], metadata['latitude_tgt'] = tuple(
                 map(str, raw_metadata['latitude'].replace(' ', '').split(',')))
             #Convert latitude string to float (reference and target)
